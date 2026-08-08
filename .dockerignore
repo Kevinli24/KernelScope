@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+build
+*.log
+*.tsbuildinfo
+
