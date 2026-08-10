@@ -1,0 +1,65 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  non-gpu-quality:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: kernelscope
+          POSTGRES_USER: kernelscope
+          POSTGRES_PASSWORD: kernelscope
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kernelscope"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kernelscope:kernelscope@localhost:5432/kernelscope
+      TEST_DATABASE_URL: postgresql://kernelscope:kernelscope@localhost:5432/kernelscope
+      GPU_MODE: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Install Python dependencies
+        run: pip install -e "worker[dev]"
+      - name: Initialize test database
+        run: for file in database/migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"; done
+      - name: JavaScript tests and builds
+        run: npm test && npm run build && npm run lint && npm run format:check
+      - name: Python tests and lint
+        run: pytest worker/tests && ruff check worker && ruff format --check worker
+      - name: Mock-mode end-to-end test
+        run: |
+          npm run dev --workspace api > /tmp/kernelscope-api.log 2>&1 &
+          python -m kernelscope_worker.main > /tmp/kernelscope-worker.log 2>&1 &
+          python scripts/e2e_mock.py
+      - name: Upload service logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-logs
+          path: /tmp/kernelscope-*.log
+
+  cuda-build:
+    if: ${{ false }} # Enable on a self-hosted NVIDIA runner.
+    runs-on: [self-hosted, linux, gpu]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S benchmarks -B build/benchmarks -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/benchmarks --parallel
+      - run: ctest --test-dir build/benchmarks --output-on-failure
